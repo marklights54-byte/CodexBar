@@ -60,6 +60,8 @@ public struct ProviderPluginCookieSession: Codable, Equatable, Sendable {
 final class ProviderPluginCookieBroker: @unchecked Sendable {
     typealias BatchImporter = @Sendable (String, Int) throws -> [(header: String, source: String)]?
     typealias JarImporter = @Sendable () throws -> [ProviderPluginCookieSession]
+    /// Runs only after an automatic import found nothing usable; it inspects directory metadata, never cookies.
+    typealias ProfileAccessProbe = @Sendable () -> ProviderFetchClassifiedError?
 
     private struct Issued {
         let session: ProviderPluginCookieSession
@@ -76,6 +78,8 @@ final class ProviderPluginCookieBroker: @unchecked Sendable {
     private let lock = NSLock()
     private let accessFailureLock = NSLock()
     private var cookieAccessFailure: ProviderFetchClassifiedError?
+    private var attemptedBrowserImport = false
+    private let profileAccessProbe: ProfileAccessProbe?
     private var observed: [String: Issued] = [:]
     private var issuedSessions: [String: Issued] = [:]
     private var visited = Set<String>()
@@ -121,7 +125,8 @@ final class ProviderPluginCookieBroker: @unchecked Sendable {
             },
             jarImporter: jarImporter,
             policy: policy,
-            background: ProviderInteractionContext.current != .userInitiated)
+            background: ProviderInteractionContext.current != .userInitiated,
+            profileAccessProbe: Self.profileAccessProbe(provider: provider, browserDetection: context.browserDetection))
     }
 
     init(
@@ -133,9 +138,11 @@ final class ProviderPluginCookieBroker: @unchecked Sendable {
         policy: ProviderPluginCookiePolicy? = nil,
         background: Bool = false,
         sessionFileURL: URL? = nil,
-        profileReader: ProviderPluginSelectedProfile.Reader? = nil)
+        profileReader: ProviderPluginSelectedProfile.Reader? = nil,
+        profileAccessProbe: ProfileAccessProbe? = nil)
     {
         self.provider = provider
+        self.profileAccessProbe = profileAccessProbe
         self.domains = domains
         self.settings = settings
         #if os(macOS)
@@ -231,11 +238,43 @@ final class ProviderPluginCookieBroker: @unchecked Sendable {
         guard let classified = error as? ProviderFetchClassifiedError,
               classified.kind == .missingCredential || classified.kind == .authenticationExpired
         else { return error }
-        if let failure = self.accessFailureLock.withLock({ self.cookieAccessFailure }) { return failure }
+        let (failure, attemptedImport) = self.accessFailureLock.withLock {
+            (self.cookieAccessFailure, self.attemptedBrowserImport)
+        }
+        // A recorded Keychain denial came from an actual decrypt attempt and keeps its existing precedence.
+        if let failure { return failure }
+        // An unreadable profile directory looks like "no cookie store" to discovery, so check it only now.
+        if attemptedImport, let profileFailure = self.profileAccessProbe?() { return profileFailure }
         return error
     }
 
+    static func profileAccessProbe(
+        provider: UsageProvider, browserDetection: BrowserDetection) -> ProfileAccessProbe?
+    {
+        #if os(macOS)
+        let order = BrowserCookieImportSupport.importOrder(for: provider)
+        return { Self.profileAccessFailure(in: order, browserDetection: browserDetection) }
+        #else
+        return nil
+        #endif
+    }
+
+    #if os(macOS)
+    static func profileAccessFailure(
+        in order: [Browser], browserDetection: BrowserDetection) -> ProviderFetchClassifiedError?
+    {
+        guard let browser = order.first(where: {
+            browserDetection.cookieSourceProfileAccessIssue($0) == .accessDenied
+        }) else { return nil }
+        return ProviderFetchClassifiedError(
+            kind: .permissionDenied,
+            message: "Cannot read \(browser.displayName)'s profile. In System Settings → Privacy & Security → "
+                + "Files & Folders, turn on \(browser.displayName) under CodexBar, then refresh.")
+    }
+    #endif
+
     private func importCandidates<Candidate>(_ operation: () throws -> [Candidate]?) throws -> [Candidate]? {
+        self.accessFailureLock.withLock { self.attemptedBrowserImport = true }
         #if os(macOS)
         return try BrowserCookieAccessGate.withAccessFailureObserver {
             self.recordAccessFailure(for: $0)

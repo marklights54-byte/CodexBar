@@ -365,6 +365,112 @@ struct ProviderPluginCookieBrokerTests {
         }
     }
 
+    @Test
+    func `denied browser profile replaces missing credential after automatic import`() throws {
+        try self.isolated { () throws in
+            let detection = Self.chromeDetection(profileAccessIssue: .accessDenied)
+            let broker = self.emptyImportBroker(source: .auto) {
+                ProviderPluginCookieBroker.profileAccessFailure(in: [.chrome], browserDetection: detection)
+            }
+            #expect(try broker.nextSession(domain: "cloud.example.test") == nil)
+            let failure = try #require(
+                broker.preferredFailure(over: Self.missingCredential) as? ProviderFetchClassifiedError)
+            let name = Browser.chrome.displayName
+            #expect(failure.kind == .permissionDenied)
+            #expect(failure.message == "Cannot read \(name)'s profile. In System Settings → Privacy & Security → "
+                + "Files & Folders, turn on \(name) under CodexBar, then refresh.")
+        }
+    }
+
+    @Test(arguments: [BrowserProfileAccessIssue?.none, .unreadable])
+    func `readable or unreadable profile keeps missing credential`(issue: BrowserProfileAccessIssue?) throws {
+        try self.isolated { () throws in
+            let detection = Self.chromeDetection(profileAccessIssue: issue)
+            let broker = self.emptyImportBroker(source: .auto) {
+                ProviderPluginCookieBroker.profileAccessFailure(in: [.chrome], browserDetection: detection)
+            }
+            #expect(try broker.nextSession(domain: "cloud.example.test") == nil)
+            let failure = broker.preferredFailure(over: Self.missingCredential) as? ProviderFetchClassifiedError
+            #expect(failure?.kind == .missingCredential)
+            #expect(failure?.message == Self.missingCredential.message)
+        }
+    }
+
+    @Test
+    func `keychain denial keeps precedence over profile probe`() throws {
+        try self.isolated { () throws in
+            let probes = BatchCalls()
+            let broker = ProviderPluginCookieBroker(
+                provider: .manus,
+                domains: self.domains,
+                settings: .init(cookieSource: .auto, manualCookieHeader: nil),
+                batches: { _, batch in
+                    guard batch == 0 else { return nil }
+                    throw BrowserCookieError.accessDenied(browser: .safari, details: "Synthetic denial")
+                },
+                profileAccessProbe: {
+                    probes.append(0)
+                    return ProviderFetchClassifiedError(kind: .permissionDenied, message: "Synthetic profile denial")
+                })
+            #expect(try broker.nextSession(domain: "cloud.example.test") == nil)
+            let failure = try #require(
+                broker.preferredFailure(over: Self.missingCredential) as? ProviderFetchClassifiedError)
+            #expect(failure.kind == .permissionDenied)
+            #expect(failure.message.hasPrefix("\(Browser.safari.displayName) cookie access needs"))
+            #expect(probes.values.isEmpty)
+        }
+    }
+
+    @Test
+    func `profile probe skips manual cookies and API failures`() throws {
+        try self.isolated { () throws in
+            let probes = BatchCalls()
+            let probe: ProviderPluginCookieBroker.ProfileAccessProbe = {
+                probes.append(0)
+                return ProviderFetchClassifiedError(kind: .permissionDenied, message: "Synthetic profile denial")
+            }
+            let manual = self.emptyImportBroker(source: .manual, probe: probe)
+            #expect(try manual.nextSession(domain: "cloud.example.test")?.source == "manual")
+            let manualFailure = manual.preferredFailure(over: Self.missingCredential) as? ProviderFetchClassifiedError
+            #expect(manualFailure?.kind == .missingCredential)
+
+            let automatic = self.emptyImportBroker(source: .auto, probe: probe)
+            #expect(try automatic.nextSession(domain: "cloud.example.test") == nil)
+            let apiError = ProviderFetchClassifiedError(kind: .apiFailure, message: "Synthetic server failure")
+            #expect((automatic.preferredFailure(over: apiError) as? ProviderFetchClassifiedError)?.kind == .apiFailure)
+            #expect(probes.values.isEmpty)
+        }
+    }
+
+    private static let missingCredential = ProviderFetchClassifiedError(
+        kind: .missingCredential, message: "Synthetic sign-in required")
+
+    private func emptyImportBroker(
+        source: ProviderCookieSource,
+        probe: @escaping ProviderPluginCookieBroker.ProfileAccessProbe) -> ProviderPluginCookieBroker
+    {
+        ProviderPluginCookieBroker(
+            provider: .manus,
+            domains: self.domains,
+            settings: .init(cookieSource: source, manualCookieHeader: "Cookie: session=manual"),
+            batches: { _, _ in nil },
+            profileAccessProbe: probe)
+    }
+
+    /// Synthetic home and probes: never touches real browser profiles, cookies, or Keychain.
+    private static func chromeDetection(profileAccessIssue: BrowserProfileAccessIssue?) -> BrowserDetection {
+        let home = "/tmp/codexbar-plugin-cookie-broker-profile"
+        let profileRoot = "\(home)/Library/Application Support/Google/Chrome"
+        return BrowserDetection(
+            homeDirectory: home,
+            cacheTTL: 0,
+            now: Date.init,
+            fileExists: { $0 == "/Applications/Google Chrome.app" || $0 == profileRoot },
+            directoryContents: { _ in nil },
+            applicationURLs: { _ in [] },
+            profileAccessIssue: { _ in profileAccessIssue })
+    }
+
     private func isolated(_ body: () throws -> Void) rethrows {
         try KeychainCacheStore.withImplicitTestStoreForTesting {
             try KeychainCacheStore.withServiceOverrideForTesting("plugin-cookies-\(UUID().uuidString)") {
