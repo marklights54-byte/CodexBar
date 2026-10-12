@@ -730,7 +730,7 @@ final class MenuBarLayoutRenderer {
             return self.optionalTextToken(
                 value,
                 unavailableLabel: L("%@ unavailable", label),
-                accessibilityText: value.map { L("%@: %@", Self.windowAccessibilityLabel(window, data: data), $0) },
+                accessibilityText: value.map { L("%@: %@", Self.semanticAccessibilityLabel(window, data: data), $0) },
                 attributes: style.attributes)
         case .runsOut, .runsOutCompact:
             let isCompact = item == .runsOutCompact
@@ -786,14 +786,18 @@ final class MenuBarLayoutRenderer {
             estimated: data.quotaIsEstimated,
             showUsed: options.showUsed)
         let prefix: String
-        let accessibilityPrefix = Self.windowAccessibilityLabel(window, data: data)
+        let taggedLane = Self.taggedSemanticLane(window, provider: data.provider)
+        let accessibilityPrefix = Self.semanticAccessibilityLabel(window, data: data)
+        let taggedPrefix = taggedLane.flatMap { Self.laneShortLabel($0, provider: data.provider) }
         switch window {
         case .session:
-            prefix = self.primaryLabel(data: data).flatMap(\.first).map { String($0).uppercased() }
+            prefix = taggedPrefix
+                ?? self.primaryLabel(data: data).flatMap(\.first).map { String($0).uppercased() }
                 ?? Self.sessionPrefix(rateWindow)
         case .weekly:
             let secondaryLabel = Self.secondaryLabel(data: data)
-            prefix = secondaryLabel.flatMap(\.first).map { String($0).uppercased() } ?? "W"
+            prefix = taggedPrefix
+                ?? secondaryLabel.flatMap(\.first).map { String($0).uppercased() } ?? "W"
         case .scopedWeekly:
             prefix = data.scopedWeeklyTitle.map { String($0.prefix(1)).uppercased() } ?? "F"
         case .automatic:
@@ -804,6 +808,12 @@ final class MenuBarLayoutRenderer {
             ? L("%@ %@", accessibilityPrefix, resolvedValue.text)
             : L("%@ unavailable", accessibilityPrefix)
         return self.textToken(display, accessibilityText: accessibility, attributes: style.attributes)
+    }
+
+    /// A tagged lane announces its own title, so a monthly lane is never read out as "Weekly".
+    private static func semanticAccessibilityLabel(_ window: PercentWindow, data: MenuBarLayoutRenderData) -> String {
+        self.taggedSemanticLane(window, provider: data.provider).map { data.laneLabels.label(for: $0) }
+            ?? self.windowAccessibilityLabel(window, data: data)
     }
 
     private static func windowAccessibilityLabel(_ window: PercentWindow, data: MenuBarLayoutRenderData) -> String {
@@ -868,7 +878,35 @@ final class MenuBarLayoutRenderer {
         let accessibility = resolvedValue.isAvailable
             ? L("%@ %@", label, resolvedValue.text)
             : L("%@ unavailable", label)
-        return self.textToken(resolvedValue.text, accessibilityText: accessibility, attributes: attributes)
+        let display = Self.laneShortLabel(lane, provider: data.provider)
+            .map { "\($0) \(resolvedValue.text)" } ?? resolvedValue.text
+        return self.textToken(display, accessibilityText: accessibility, attributes: attributes)
+    }
+
+    /// Provider-declared menu bar tag for a lane; nil keeps the lane's percentage bare.
+    private static func laneShortLabel(_ lane: MenuBarLayoutLane, provider: UsageProvider) -> String? {
+        let labels = ProviderDescriptorRegistry.descriptor(for: provider).menuBarMetrics.laneShortLabels
+        return switch lane {
+        case .primary: labels[.primary]
+        case .secondary: labels[.secondary]
+        case .tertiary: labels[.tertiary]
+        }
+    }
+
+    /// The tagged lane backing a session/weekly percentage, so a provider with explicit lane tags never falls
+    /// back to colliding first-letter prefixes; nil when the window maps to no tagged lane.
+    private static func taggedSemanticLane(_ window: PercentWindow, provider: UsageProvider) -> MenuBarLayoutLane? {
+        let presentation = ProviderDescriptorRegistry.descriptor(for: provider).presentation
+        let primaryWindow = PercentWindow.forSemanticWindow(presentation.primarySemanticWindow)
+        let lane: MenuBarLayoutLane? = if window == primaryWindow {
+            .primary
+        } else if window == PercentWindow.forSemanticWindow(presentation.secondarySemanticWindow) {
+            .secondary
+        } else {
+            nil
+        }
+        guard let lane, self.laneShortLabel(lane, provider: provider) != nil else { return nil }
+        return lane
     }
 
     private static func extraPercentToken(
@@ -888,8 +926,12 @@ final class MenuBarLayoutRenderer {
         let accessibility = resolvedValue.isAvailable
             ? L("%@ %@", title, resolvedValue.text)
             : L("%@ unavailable", title)
+        let shortLabel = ProviderDescriptorRegistry.descriptor(for: data.provider)
+            .menuBarMetrics.namedExtraShortLabels[id]
         return self.textToken(
-            L("%@ %@", title, resolvedValue.text), accessibilityText: accessibility, attributes: attributes)
+            L("%@ %@", shortLabel ?? title, resolvedValue.text),
+            accessibilityText: accessibility,
+            attributes: attributes)
     }
 
     private static func percentValue(
