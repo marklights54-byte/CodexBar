@@ -922,32 +922,6 @@ final class MenuBarLayoutRenderer {
         return self.textToken(display, accessibilityText: accessibility, attributes: attributes)
     }
 
-    /// Provider-declared menu bar tag for a lane; nil keeps the lane's percentage bare.
-    private static func laneShortLabel(_ lane: MenuBarLayoutLane, provider: UsageProvider) -> String? {
-        let labels = ProviderDescriptorRegistry.descriptor(for: provider).menuBarMetrics.laneShortLabels
-        return switch lane {
-        case .primary: labels[.primary]
-        case .secondary: labels[.secondary]
-        case .tertiary: labels[.tertiary]
-        }
-    }
-
-    /// The tagged lane backing a session/weekly percentage, so a provider with explicit lane tags never falls
-    /// back to colliding first-letter prefixes; nil when the window maps to no tagged lane.
-    private static func taggedSemanticLane(_ window: PercentWindow, provider: UsageProvider) -> MenuBarLayoutLane? {
-        let presentation = ProviderDescriptorRegistry.descriptor(for: provider).presentation
-        let primaryWindow = PercentWindow.forSemanticWindow(presentation.primarySemanticWindow)
-        let lane: MenuBarLayoutLane? = if window == primaryWindow {
-            .primary
-        } else if window == PercentWindow.forSemanticWindow(presentation.secondarySemanticWindow) {
-            .secondary
-        } else {
-            nil
-        }
-        guard let lane, self.laneShortLabel(lane, provider: provider) != nil else { return nil }
-        return lane
-    }
-
     private static func extraPercentToken(
         _ id: String,
         data: MenuBarLayoutRenderData,
@@ -1204,6 +1178,34 @@ final class MenuBarLayoutRenderer {
             return size == .small ? 8 : 9
         }
         return size == .small ? 14 : 18
+    }
+}
+
+extension MenuBarLayoutRenderer {
+    /// Provider-declared menu bar tag for a lane; nil keeps the lane's percentage bare.
+    private static func laneShortLabel(_ lane: MenuBarLayoutLane, provider: UsageProvider) -> String? {
+        let labels = ProviderDescriptorRegistry.descriptor(for: provider).menuBarMetrics.laneShortLabels
+        return switch lane {
+        case .primary: labels[.primary]
+        case .secondary: labels[.secondary]
+        case .tertiary: labels[.tertiary]
+        }
+    }
+
+    /// The tagged lane backing a session/weekly percentage, so a provider with explicit lane tags never falls
+    /// back to colliding first-letter prefixes; nil when the window maps to no tagged lane.
+    private static func taggedSemanticLane(_ window: PercentWindow, provider: UsageProvider) -> MenuBarLayoutLane? {
+        let presentation = ProviderDescriptorRegistry.descriptor(for: provider).presentation
+        let primaryWindow = PercentWindow.forSemanticWindow(presentation.primarySemanticWindow)
+        let lane: MenuBarLayoutLane? = if window == primaryWindow {
+            .primary
+        } else if window == PercentWindow.forSemanticWindow(presentation.secondarySemanticWindow) {
+            .secondary
+        } else {
+            nil
+        }
+        guard let lane, self.laneShortLabel(lane, provider: provider) != nil else { return nil }
+        return lane
     }
 }
 
