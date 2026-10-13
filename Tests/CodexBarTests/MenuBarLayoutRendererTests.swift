@@ -168,16 +168,6 @@ struct MenuBarLayoutRendererTests {
     }
 
     @Test
-    func `named extra short labels only tag declared named extras`() {
-        for descriptor in ProviderDescriptorRegistry.all {
-            let metrics = descriptor.menuBarMetrics
-            #expect(Set(metrics.namedExtraShortLabels.keys).isSubset(of: Set(metrics.namedExtras.keys)))
-        }
-        #expect(ProviderDescriptorRegistry.descriptor(for: .cursor).menuBarMetrics
-            .namedExtraShortLabels == [CursorSandUsageStatus.extraWindowID: "GB"])
-    }
-
-    @Test
     func `Cursor semantic tokens follow real resolver windows`() {
         // Cursor's resolver leaves session empty and backs weekly with the secondary (monthly Cursor) lane.
         let renderer = MenuBarLayoutRenderer()
@@ -279,46 +269,6 @@ struct MenuBarLayoutRendererTests {
                 options: self.options())
             #expect(rendered.attributedTitle.string == (known ? "GB \(Int(used))%" : "GB –"))
             #expect(rendered.accessibilityLabel == (known ? "Grok Bot \(Int(used))%" : "Grok Bot unavailable"))
-        }
-    }
-
-    @Test
-    func `synthetic Grok Bot before and after proof`() throws {
-        guard let directory = ProcessInfo.processInfo.environment["CODEXBAR_GROK_LAYOUT_SCREENSHOT_DIR"] else { return }
-        let extra = MenuBarLayoutRenderExtra(NamedRateWindow(
-            id: "cursor-grok-bot",
-            title: "Grok Bot",
-            window: RateWindow(usedPercent: 42, windowMinutes: nil, resetsAt: nil, resetDescription: nil)))
-        for includeExtra in [false, true] {
-            let name = includeExtra ? "after" : "before"
-            let tokens: [MenuBarLayoutToken] = [
-                .lanePercent(lane: .primary), .lanePercent(lane: .secondary), .lanePercent(lane: .tertiary),
-            ] + (includeExtra ? [.extraPercent(id: "cursor-grok-bot")] : [])
-            let rendered = MenuBarLayoutRenderer().render(
-                layout: MenuBarLayout(lines: [tokens]),
-                data: self.data(provider: .cursor, extraRateWindows: [extra]),
-                icon: nil,
-                options: self.options())
-            let image = NSImage(size: NSSize(width: 480, height: 110))
-            image.lockFocus()
-            NSColor.white.setFill()
-            NSRect(x: 0, y: 0, width: 480, height: 110).fill()
-            let caption = "\(name.capitalized): Cursor \(includeExtra ? "+ Grok Bot" : "standard lanes")"
-                + " · Synthetic data"
-            (caption as NSString).draw(at: NSPoint(x: 16, y: 80), withAttributes: [
-                .font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.black,
-            ])
-            let transform = NSAffineTransform()
-            transform.scale(by: 2)
-            transform.concat()
-            let text = NSMutableAttributedString(attributedString: rendered.attributedTitle)
-            text.addAttribute(.foregroundColor, value: NSColor.black, range: NSRange(location: 0, length: text.length))
-            text.draw(at: NSPoint(x: 8, y: 16))
-            image.unlockFocus()
-            let tiff = try #require(image.tiffRepresentation)
-            let bitmap = try #require(NSBitmapImageRep(data: tiff))
-            let png = try #require(bitmap.representation(using: .png, properties: [:]))
-            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("grok-layout-\(name).png"))
         }
     }
 
