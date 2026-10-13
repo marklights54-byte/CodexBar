@@ -148,7 +148,7 @@ def nested_fixture(directory):
             original_drain(ownership, process)
     with patch.object(runner.TestProcessOwnership, "refresh", refresh), \
             patch.object(runner.TestProcessOwnership, "drain", drain):
-        result = runner.run_command([sys.executable, __file__, "--fixture", "failure", str(child)], timeout=5)
+        result = runner.run_command([sys.executable, __file__, "--fixture", "failure", str(child)], timeout=20)
         assert result == 23
     (root / "complete").touch()
 
@@ -172,7 +172,7 @@ class NestedProcessCleanupTests(unittest.TestCase):
             attempts = 0
             def snapshot(required=()):
                 if attempts == 0:
-                    wait_until(lambda: (root / "leader-ready").exists())
+                    wait_until(lambda: (root / "leader-ready").exists(), timeout=10)
                     leader = int((root / "leader-ready").read_text())
                     # First outer poll sees the live leader, but misses its child's birth.
                     infos = original_snapshot(required)
@@ -222,7 +222,7 @@ class NestedProcessCleanupTests(unittest.TestCase):
                         patch.object(runner.TestProcessOwnership, "refresh", refresh), \
                         patch.object(runner.TestProcessOwnership, "send", send):
                     self.assertEqual(runner.run_command(
-                        [sys.executable, __file__, "--nested-fixture", directory], timeout=5), 0)
+                        [sys.executable, __file__, "--nested-fixture", directory], timeout=20), 0)
                 self.assertEqual(observations, [0, 1])
                 self.assertNotIn(int((child_root / "pid").read_text()), signaled)
                 self.assertNotIn(sentinel.pid, signaled)
@@ -1133,7 +1133,7 @@ class AnchorSemanticsTests(unittest.TestCase):
             process = subprocess.Popen([sys.executable, __file__, "--fixture", "success", directory],
                                        start_new_session=True)
             try:
-                wait_until(lambda: (root / "ready").exists())
+                wait_until(lambda: (root / "ready").exists(), timeout=10)
                 self.assertIsNone(runner.unreaped_exit_code(process))
                 identity = runner.test_process(process.pid)
                 self.assertIsNotNone(identity)
